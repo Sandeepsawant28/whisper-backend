@@ -5,6 +5,16 @@ in this repo). Serves both a REST /transcribe endpoint and live streaming
 transcription over Socket.IO.
 """
 import os
+
+# --- Cap thread usage BEFORE any heavy libraries are imported ---
+# This must happen first: numpy/ctranslate2/BLAS read these env vars once,
+# at import time, to decide how many threads to spin up. Each extra thread
+# can carry its own memory overhead, which adds up fast on a 512MB instance.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["CT2_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 import gc
 import wave
 import tempfile
@@ -29,6 +39,10 @@ transcribe_lock = threading.Lock()
 
 STREAM_MAX_BUFFER_SECONDS = 12
 STREAM_MIN_SECONDS = 1.0
+# Cap how large the raw (undecoded) webm buffer is allowed to grow per
+# streaming session, so a long-running connection doesn't slowly build up
+# an ever-larger bytearray in memory alongside the decoded audio.
+STREAM_MAX_RAW_BYTES = 2_000_000  # ~2MB of raw webm, generous headroom
 
 
 def load_model():
@@ -40,7 +54,13 @@ def load_model():
         local_path = snapshot_download(repo_id=HF_REPO_ID, allow_patterns=["ct2/*"])
         model_path = os.path.join(local_path, "ct2")
         print(f"Loading CTranslate2 model from {model_path} on {DEVICE} ({COMPUTE_TYPE})...")
-        model = WhisperModel(model_path, device=DEVICE, compute_type=COMPUTE_TYPE)
+        model = WhisperModel(
+            model_path,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+            cpu_threads=1,
+            num_workers=1,
+        )
         print(f"[OK] Model loaded successfully on {DEVICE.upper()} ({COMPUTE_TYPE}).")
     except Exception as err:
         print(f"Notice: Model load failed ({err}).")
@@ -98,6 +118,7 @@ def transcribe_audio():
 
         wav_path = webm_path.replace(".webm", ".wav")
         segments, info = None, None
+        text = ""
 
         try:
             if os.path.getsize(webm_path) < 600:
@@ -127,6 +148,10 @@ def transcribe_audio():
                 best_of=1,
                 vad_filter=False,
             )
+            # Materialize the segments generator into a list immediately so
+            # we can drop the model's internal state as soon as possible,
+            # rather than holding the generator (and whatever it references)
+            # open longer than necessary.
             text = " ".join([seg.text for seg in segments]).strip()
 
             if not text:
@@ -151,7 +176,7 @@ def transcribe_audio():
                     except Exception:
                         pass
             try:
-                del segments, info
+                del segments, info, text
             except NameError:
                 pass
             gc.collect()
@@ -195,12 +220,19 @@ def on_audio_chunk(data):
         streaming_sessions[sid] = bytearray()
 
     streaming_sessions[sid].extend(data)
+
+    # Hard cap the raw buffer so a long-running session can't slowly grow
+    # an unbounded bytearray in memory. Keep only the most recent bytes.
+    if len(streaming_sessions[sid]) > STREAM_MAX_RAW_BYTES:
+        streaming_sessions[sid] = streaming_sessions[sid][-STREAM_MAX_RAW_BYTES:]
+
     webm_bytes = bytes(streaming_sessions[sid])
 
     if len(webm_bytes) < 600:
         return
 
     webm_path = wav_path = None
+    audio = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_webm:
             temp_webm.write(webm_bytes)
@@ -241,10 +273,16 @@ def on_audio_chunk(data):
                     os.remove(p)
                 except Exception:
                     pass
+        if audio is not None:
+            del audio
         gc.collect()
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 7860))
     print(f"\n[RUNNING] Whisper Konkani API running on port {port}")
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    # use_reloader=False is important: without it, Werkzeug's dev-server
+    # reloader can spawn a second child process that loads its own full
+    # copy of the model into memory, roughly doubling RAM use on boot.
+    socketio.run(app, host='0.0.0.0', port=port, debug=False,
+                 use_reloader=False, allow_unsafe_werkzeug=True)
