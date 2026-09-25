@@ -1,7 +1,6 @@
 flask
 flask-cors
 flask-socketio
-eventlet
 faster-whisper
 huggingface_hub
 numpy
