@@ -5,4 +5,3 @@ eventlet
 faster-whisper
 huggingface_hub
 numpy
-gradio
