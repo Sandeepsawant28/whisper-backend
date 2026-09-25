@@ -58,9 +58,8 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
                      max_http_buffer_size=20_000_000)
-
 streaming_sessions = {}
 
 
