@@ -1,13 +1,22 @@
+<<<<<<< HEAD
 ---
 title: Whisper Konkani Backend
-emoji: 📊
-colorFrom: blue
+emoji: 🎙️
+colorFrom: green
 colorTo: blue
-sdk: gradio
-sdk_version: 6.28.0
-python_version: '3.12'
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
-
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+(your description text, if any)
+=======
+---
+title: Whisper Small Agricultural Backend
+emoji: 🚀
+colorFrom: blue
+colorTo: yellow
+sdk: docker
+pinned: false
+---
+(HF's auto-generated placeholder text)
+>>>>>>> ea3f... (origin/main)
